@@ -64,8 +64,8 @@ st.markdown(f"""
 
     .glass-card {{
         background: {card_bg}; 
-        backdrop-filter: blur(16px); 
-        -webkit-backdrop-filter: blur(16px);
+        backdrop-filter: blur(20px); 
+        -webkit-backdrop-filter: blur(20px);
         border: 1px solid {border_color}; 
         border-radius: 24px;
         padding: 40px;
@@ -84,7 +84,6 @@ st.markdown(f"""
         text-shadow: 0 0 20px rgba(255, 0, 128, 0.5);
         letter-spacing: 6px;
         margin-bottom: 0;
-        text-align: center;
     }}
 
     .subtitle {{
@@ -94,7 +93,6 @@ st.markdown(f"""
         text-transform: uppercase;
         letter-spacing: 3px;
         margin-bottom: 40px;
-        text-align: center;
     }}
 
     .stTextInput>div>div>input {{
@@ -115,12 +113,9 @@ st.markdown(f"""
         width: 100%;
         height: 3.5em;
         transition: 0.3s;
-        margin-top: 10px;
     }}
 
-    #MainMenu {{visibility: hidden;}}
-    footer {{visibility: hidden;}}
-    header {{visibility: hidden;}}
+    #MainMenu, footer, header {{visibility: hidden;}}
     </style>
     """, unsafe_allow_html=True)
 
@@ -134,24 +129,21 @@ if st.session_state.stage == 'home':
     url = st.text_input("", placeholder="Paste your link here...", label_visibility="collapsed")
     if st.button("SEARCH LINK"):
         if url:
-            with st.spinner("Analyzing..."):
-                time.sleep(1.2)
+            with st.spinner("Searching..."):
+                time.sleep(1.5)
                 st.session_state.url = url
                 st.session_state.stage = 'quality'
                 st.rerun()
         else:
-            st.error("Please provide a link.")
+            st.error("Please enter a link!")
     st.markdown('</div>', unsafe_allow_html=True)
 
 elif st.session_state.stage == 'quality':
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.markdown(f"<h3 style='color: {text_color};'>Select Quality</h3>", unsafe_allow_html=True)
-    
     option = st.selectbox("", ["High Quality Video", "Audio Only (MP3)"], label_visibility="collapsed")
-    
     if st.button("START DOWNLOAD"):
-        st.success("Download Initialized!")
-        
+        st.success("Download started!")
     if st.button("← GO BACK"):
         st.session_state.stage = 'home'
         st.rerun()
