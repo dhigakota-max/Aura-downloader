@@ -2,561 +2,546 @@ import streamlit as st
 import yt_dlp
 import os
 import re
-from datetime import date
+import time
 
-# --- Page Configuration ---
+# ============================================================
+# PAGE CONFIG
+# ============================================================
 st.set_page_config(
-    page_title="Aula Downloader",
-    page_icon="🎵",
+    page_title="AURA Downloader",
+    page_icon="🔮",
     layout="centered",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# --- Session State Init ---
-defaults = {
+# ============================================================
+# SESSION STATE
+# ============================================================
+for k, v in {
     'theme': 'Dark',
     'stage': 'home',
     'video_info': None,
     'url': '',
-    'formats': {}
-}
-for k, v in defaults.items():
+    'formats': {},
+    'platform': 'other',
+    'settings_open': False,
+}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# --- Helper Functions ---
-def format_size(bytes_val):
-    if not bytes_val:
-        return "~Unknown"
-    mb = bytes_val / (1024 * 1024)
-    if mb >= 1000:
-        return f"~{mb/1024:.1f} GB"
-    return f"~{mb:.1f} MB"
+# ============================================================
+# HELPERS
+# ============================================================
+def fmt_size(b):
+    if not b: return "~Size N/A"
+    mb = b / 1048576
+    return f"~{mb/1024:.1f} GB" if mb >= 1000 else f"~{mb:.1f} MB"
 
 def detect_platform(url):
-    if not url:
-        return "unknown"
-    url_lower = url.lower()
-    if "youtube.com" in url_lower or "youtu.be" in url_lower:
-        return "youtube"
-    elif "instagram.com" in url_lower:
-        return "instagram"
-    elif "tiktok.com" in url_lower:
-        return "tiktok"
+    u = (url or "").lower()
+    if "youtube.com" in u or "youtu.be" in u: return "youtube"
+    if "instagram.com" in u: return "instagram"
+    if "tiktok.com" in u: return "tiktok"
     return "other"
 
-def get_video_info(url):
-    ydl_opts = {
+def get_ydl_base():
+    return {
         'quiet': True,
-        'noplaylist': True,
         'no_warnings': True,
-        'extract_flat': False,
+        'noplaylist': True,
+        'http_headers': {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+            'Accept-Language': 'en-us,en;q=0.5',
+        },
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        return info
+
+def get_video_info(url):
+    opts = get_ydl_base()
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
 
 def get_format_sizes(info, platform):
-    """Extract available format sizes from video info."""
     formats = {}
-    available_formats = info.get('formats', [])
+    avail = info.get('formats', [])
 
-    # Get audio size
-    audio_size = None
-    for f in available_formats:
-        if f.get('vcodec') == 'none' and f.get('acodec') != 'none':
-            if f.get('filesize') or f.get('filesize_approx'):
-                audio_size = f.get('filesize') or f.get('filesize_approx')
-                break
+    audio_size = next(
+        (f.get('filesize') or f.get('filesize_approx')
+         for f in avail
+         if f.get('vcodec') == 'none' and f.get('acodec') != 'none'
+         and (f.get('filesize') or f.get('filesize_approx'))),
+        None
+    )
+
+    def size_for_height(h):
+        for f in avail:
+            fh = f.get('height') or 0
+            if fh <= h and fh > 0 and f.get('vcodec') != 'none':
+                sz = f.get('filesize') or f.get('filesize_approx')
+                if sz: return sz
+        return None
 
     if platform == "youtube":
-        quality_map = {
-            "MP3 Audio": ("bestaudio/best", audio_size),
-            "480p Video": ("bestvideo[height<=480]+bestaudio/best[height<=480]/best[height<=480]", None),
-            "720p Video": ("bestvideo[height<=720]+bestaudio/best[height<=720]/best[height<=720]", None),
-            "1080p Video": ("bestvideo[height<=1080]+bestaudio/best[height<=1080]/best[height<=1080]", None),
-        }
-        for label, (fmt, size) in quality_map.items():
-            # Try to find matching format size
-            if size is None and label != "MP3 Audio":
-                height = int(re.search(r'(\d+)p', label).group(1)) if re.search(r'(\d+)p', label) else None
-                for f in available_formats:
-                    fh = f.get('height', 0) or 0
-                    if height and fh <= height and fh > 0 and f.get('vcodec') != 'none':
-                        sz = f.get('filesize') or f.get('filesize_approx')
-                        if sz:
-                            size = sz
-                            break
-            formats[label] = {'format': fmt, 'size': size, 'is_audio': label == "MP3 Audio"}
+        entries = [
+            ("🎵 MP3 Audio",    "bestaudio/best",                                           None, True),
+            ("📱 480p Video",   "bestvideo[height<=480]+bestaudio/best[height<=480]/best",  480,  False),
+            ("🎬 720p Video",   "bestvideo[height<=720]+bestaudio/best[height<=720]/best",  720,  False),
+            ("🖥  1080p Video", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",1080, False),
+        ]
+        for label, fmt, h, is_a in entries:
+            sz = audio_size if is_a else size_for_height(h)
+            formats[label] = {'format': fmt, 'size': sz, 'is_audio': is_a}
 
     elif platform == "instagram":
-        quality_map = {
-            "Best Quality": ("bestvideo+bestaudio/best", None),
-            "Medium Quality": ("bestvideo[height<=720]+bestaudio/best[height<=720]", None),
-            "Low Quality": ("bestvideo[height<=480]+bestaudio/best[height<=480]", None),
-        }
-        for label, (fmt, size) in quality_map.items():
-            for f in available_formats:
-                sz = f.get('filesize') or f.get('filesize_approx')
-                if sz and not size:
-                    size = sz
-            formats[label] = {'format': fmt, 'size': size, 'is_audio': False}
+        best_sz = next(
+            (f.get('filesize') or f.get('filesize_approx') for f in avail
+             if f.get('filesize') or f.get('filesize_approx')), None
+        )
+        for label, fmt in [
+            ("🌟 Best Quality",  "bestvideo+bestaudio/best"),
+            ("📱 Medium 720p",   "bestvideo[height<=720]+bestaudio/best"),
+            ("🔻 Low 480p",      "bestvideo[height<=480]+bestaudio/best"),
+        ]:
+            formats[label] = {'format': fmt, 'size': best_sz, 'is_audio': False}
 
     elif platform == "tiktok":
-        formats["No Watermark HD"] = {
-            'format': 'bestvideo+bestaudio/best',
-            'size': None,
-            'is_audio': False
-        }
-        formats["No Watermark SD"] = {
-            'format': 'worst',
-            'size': None,
-            'is_audio': False
-        }
-        # Try to get size
-        for f in available_formats:
-            sz = f.get('filesize') or f.get('filesize_approx')
-            if sz:
-                formats["No Watermark HD"]['size'] = sz
-                break
+        best_sz = next(
+            (f.get('filesize') or f.get('filesize_approx') for f in avail
+             if f.get('filesize') or f.get('filesize_approx')), None
+        )
+        formats["🎵 No Watermark HD"] = {'format': 'bestvideo+bestaudio/best', 'size': best_sz, 'is_audio': False}
+        formats["📱 No Watermark SD"] = {'format': 'best[height<=480]',        'size': None,     'is_audio': False}
+
     else:
-        formats["Best Quality"] = {'format': 'bestvideo+bestaudio/best', 'size': None, 'is_audio': False}
-        formats["Audio Only"] = {'format': 'bestaudio/best', 'size': None, 'is_audio': True}
+        formats["🌟 Best Quality"] = {'format': 'bestvideo+bestaudio/best', 'size': None, 'is_audio': False}
+        formats["🎵 Audio Only"]   = {'format': 'bestaudio/best',           'size': None, 'is_audio': True}
 
     return formats
 
-def download_video(url, fmt, is_audio, output_name="aula_download"):
-    """Download video/audio and return file path."""
-    ext = "mp3" if is_audio else "mp4"
-    out_template = f"/tmp/{output_name}.%(ext)s"
+def download_video(url, fmt, is_audio, output_name="aura_dl"):
+    for f in os.listdir('/tmp'):
+        if f.startswith(output_name):
+            try: os.remove(f"/tmp/{f}")
+            except: pass
 
-    ydl_opts = {
+    opts = get_ydl_base()
+    opts.update({
         'format': fmt,
-        'outtmpl': out_template,
-        'quiet': True,
-        'no_warnings': True,
+        'outtmpl': f"/tmp/{output_name}.%(ext)s",
         'merge_output_format': 'mp4' if not is_audio else None,
-    }
+        # Use android player client to bypass YouTube 403
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    })
 
     if is_audio:
-        ydl_opts['postprocessors'] = [{
+        opts['postprocessors'] = [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }]
 
-    # TikTok-specific: try to get no-watermark version
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://www.tiktok.com/',
-    }
     if 'tiktok' in url.lower():
-        ydl_opts['http_headers'] = headers
+        opts['http_headers']['Referer'] = 'https://www.tiktok.com/'
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([url])
 
-    # Find the downloaded file
     for f in os.listdir('/tmp'):
         if f.startswith(output_name):
             return f"/tmp/{f}"
     return None
 
 # ============================================================
-# SIDEBAR
+# INLINE SETTINGS PANEL
 # ============================================================
-with st.sidebar:
-    st.markdown("## ⚙️ Settings")
-    theme = st.radio("Theme", ["Dark", "Light"], index=0 if st.session_state.theme == "Dark" else 1, horizontal=True)
-    st.session_state.theme = theme
-    st.markdown("---")
-    st.markdown("## ℹ️ About")
+if st.session_state.settings_open:
+    is_d2 = st.session_state.theme == "Dark"
+    p_bg  = "rgba(16,4,36,0.97)"   if is_d2 else "rgba(238,232,255,0.97)"
+    p_fg  = "#d8c8ff"               if is_d2 else "#1a0050"
+
     st.markdown(f"""
-| | |
-|---|---|
-| **App** | Aula Downloader |
-| **Made by** | Udula Thalisha |
-| **Version** | 1.0 |
-| **Date** | April 26, 2026 |
-| **WhatsApp** | 0757856311 |
-""")
+    <div style="background:{p_bg};border:1px solid rgba(140,90,255,0.3);
+         border-radius:20px;padding:1.4rem 1.8rem;margin-bottom:0.8rem;
+         box-shadow:0 8px 32px rgba(90,40,180,0.3);">
+      <p style="font-family:'Syne',sans-serif;font-weight:800;font-size:1.1rem;
+         color:{p_fg};margin:0 0 0.8rem;">⚙️ Settings &amp; About</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    ca, cb = st.columns(2)
+    with ca:
+        t_sel = st.radio("🎨 Theme", ["Dark", "Light"],
+                          index=0 if st.session_state.theme == "Dark" else 1,
+                          key="theme_radio")
+        if t_sel != st.session_state.theme:
+            st.session_state.theme = t_sel
+            st.rerun()
+    with cb:
+        st.markdown(f"""
+        <div style="font-size:0.83rem;line-height:2.1;color:{p_fg};">
+        📱 <b>AURA Downloader</b><br>
+        👤 Udula Thalisha<br>
+        🔢 Version 1.0<br>
+        📅 April 26, 2026<br>
+        💬 0757856311
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("✅ YouTube &nbsp; ✅ Instagram &nbsp; ✅ TikTok")
+    if st.button("✕  Close Settings", key="close_set"):
+        st.session_state.settings_open = False
+        st.rerun()
     st.markdown("---")
-    st.markdown("### 📱 Supported Platforms")
-    st.markdown("✅ YouTube  \n✅ Instagram Reels  \n✅ TikTok")
 
 # ============================================================
 # DYNAMIC CSS
 # ============================================================
 is_dark = st.session_state.theme == "Dark"
 
-bg_main = "linear-gradient(135deg, #0a0a12 0%, #12002a 50%, #0a0a12 100%)" if is_dark else "linear-gradient(135deg, #f8f4ff 0%, #ede8ff 50%, #f8f4ff 100%)"
-text_color = "#f0f0ff" if is_dark else "#1a0040"
-subtext_color = "#a090c0" if is_dark else "#6040a0"
-card_bg = "rgba(255,255,255,0.04)" if is_dark else "rgba(255,255,255,0.85)"
-card_border = "rgba(150,100,255,0.25)" if is_dark else "rgba(120,60,220,0.2)"
-input_bg = "rgba(255,255,255,0.07)" if is_dark else "rgba(255,255,255,0.9)"
-input_border = "rgba(150,100,255,0.4)" if is_dark else "rgba(120,60,220,0.4)"
+bg      = "linear-gradient(135deg,#060612 0%,#0e0025 55%,#060612 100%)" if is_dark else "linear-gradient(135deg,#f4f0ff 0%,#e8deff 55%,#f4f0ff 100%)"
+fg      = "#f0eeff" if is_dark else "#180040"
+sub     = "#9070c0" if is_dark else "#5030a0"
+crd_bg  = "rgba(255,255,255,0.04)" if is_dark else "rgba(255,255,255,0.85)"
+crd_bdr = "rgba(140,90,255,0.22)"  if is_dark else "rgba(110,50,210,0.18)"
+inp_bg  = "rgba(255,255,255,0.06)" if is_dark else "rgba(255,255,255,0.9)"
+inp_bdr = "rgba(140,90,255,0.38)"  if is_dark else "rgba(110,50,210,0.38)"
+sb_bg   = "rgba(8,2,22,0.96)"      if is_dark else "rgba(242,237,255,0.96)"
 
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=Inter:wght@300;400;500&display=swap');
 
-/* Global Reset */
-.stApp {{
-    background: {bg_main};
-    color: {text_color};
-    font-family: 'DM Sans', sans-serif;
+.stApp {{ background:{bg}; color:{fg}; font-family:'Inter',sans-serif; }}
+#MainMenu {{ visibility:visible !important; }}
+footer {{ visibility:hidden; }}
+header {{ visibility:visible !important; }}
+.block-container {{ padding-top:0.5rem; padding-bottom:2rem; max-width:660px; }}
+
+/* Sidebar arrow button — purple gradient */
+[data-testid="collapsedControl"] {{
+    background:linear-gradient(135deg,#7c3aed,#db2777) !important;
+    border-radius:10px !important;
+    color:white !important;
+    opacity:1 !important;
+    visibility:visible !important;
+}}
+[data-testid="collapsedControl"] svg {{
+    fill:white !important;
+    stroke:white !important;
 }}
 
-/* Hide Streamlit branding */
-#MainMenu, footer, header {{ visibility: hidden; }}
-.block-container {{ padding-top: 2rem; padding-bottom: 2rem; max-width: 680px; }}
-
-/* Title */
-.aula-hero {{
-    text-align: center;
-    padding: 2rem 0 1.5rem;
+/* Hero */
+.aura-wrap {{ text-align:center; padding:1rem 0 0.4rem; }}
+.aura-name {{
+    font-family:'Syne',sans-serif;
+    font-size:4rem;
+    font-weight:900;
+    background:linear-gradient(135deg,#a78bfa 0%,#f472b6 50%,#60a5fa 100%);
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+    background-clip:text;
+    letter-spacing:-2px;
+    line-height:1;
+    margin:0;
 }}
-.aula-title {{
-    font-family: 'Syne', sans-serif;
-    font-size: 3.5rem;
-    font-weight: 800;
-    background: linear-gradient(135deg, #a78bfa, #f472b6, #60a5fa);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    letter-spacing: -1px;
-    margin: 0;
-    line-height: 1.1;
+.aura-sub {{
+    color:{sub};
+    font-size:0.75rem;
+    letter-spacing:4px;
+    text-transform:uppercase;
+    margin:0.3rem 0 0.6rem;
+    font-weight:500;
 }}
-.aula-sub {{
-    font-family: 'DM Sans', sans-serif;
-    color: {subtext_color};
-    font-size: 0.9rem;
-    letter-spacing: 3px;
-    text-transform: uppercase;
-    margin-top: 0.3rem;
+.badge {{
+    display:inline-block;
+    padding:3px 12px;
+    border-radius:30px;
+    font-size:0.68rem;
+    font-weight:700;
+    letter-spacing:1.5px;
+    text-transform:uppercase;
+    margin:0 3px;
 }}
+.yt {{ background:rgba(255,50,50,0.12);  color:#ff7070; border:1px solid rgba(255,50,50,0.25); }}
+.ig {{ background:rgba(220,50,110,0.12); color:#f472b6; border:1px solid rgba(220,50,110,0.25); }}
+.tt {{ background:rgba(0,210,210,0.12);  color:#67e8f9; border:1px solid rgba(0,210,210,0.25); }}
 
 /* Cards */
-.glass-card {{
-    background: {card_bg};
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-radius: 24px;
-    padding: 2rem;
-    border: 1px solid {card_border};
-    box-shadow: 0 8px 40px rgba(100,60,200,0.15);
-    margin-bottom: 1rem;
+.card {{
+    background:{crd_bg};
+    backdrop-filter:blur(18px);
+    border-radius:22px;
+    padding:1.5rem 1.7rem;
+    border:1px solid {crd_bdr};
+    box-shadow:0 6px 32px rgba(100,50,200,0.12);
+    margin-bottom:0.9rem;
 }}
 
-/* Platform badges */
-.platform-badge {{
-    display: inline-block;
-    padding: 3px 12px;
-    border-radius: 20px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    margin: 0 4px;
-}}
-.yt-badge {{ background: rgba(255,0,0,0.15); color: #ff6b6b; border: 1px solid rgba(255,0,0,0.25); }}
-.ig-badge {{ background: rgba(225,48,108,0.15); color: #f472b6; border: 1px solid rgba(225,48,108,0.25); }}
-.tt-badge {{ background: rgba(0,200,200,0.15); color: #67e8f9; border: 1px solid rgba(0,200,200,0.25); }}
-
-/* Input styling */
+/* Text input */
 .stTextInput > div > div > input {{
-    background: {input_bg} !important;
-    border: 1.5px solid {input_border} !important;
-    border-radius: 14px !important;
-    color: {text_color} !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-size: 1rem !important;
-    padding: 0.8rem 1rem !important;
+    background:{inp_bg} !important;
+    border:1.5px solid {inp_bdr} !important;
+    border-radius:13px !important;
+    color:{fg} !important;
+    font-family:'Inter',sans-serif !important;
+    font-size:0.93rem !important;
+    padding:0.72rem 1rem !important;
 }}
 .stTextInput > div > div > input:focus {{
-    border-color: #a78bfa !important;
-    box-shadow: 0 0 0 3px rgba(167,139,250,0.2) !important;
+    border-color:#a78bfa !important;
+    box-shadow:0 0 0 3px rgba(167,139,250,0.18) !important;
 }}
 
-/* Buttons */
+/* All buttons default */
 .stButton > button {{
-    background: linear-gradient(135deg, #7c3aed, #db2777) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 14px !important;
-    font-family: 'Syne', sans-serif !important;
-    font-weight: 700 !important;
-    font-size: 0.95rem !important;
-    letter-spacing: 1px !important;
-    padding: 0.7rem 2rem !important;
-    width: 100% !important;
-    transition: all 0.2s ease !important;
-    box-shadow: 0 4px 20px rgba(124,58,237,0.35) !important;
+    background:linear-gradient(135deg,#7c3aed,#db2777) !important;
+    color:white !important;
+    border:none !important;
+    border-radius:13px !important;
+    font-family:'Syne',sans-serif !important;
+    font-weight:700 !important;
+    font-size:0.88rem !important;
+    letter-spacing:1.2px !important;
+    padding:0.65rem 1.5rem !important;
+    width:100% !important;
+    box-shadow:0 4px 18px rgba(124,58,237,0.28) !important;
+    transition:transform .15s,box-shadow .15s !important;
 }}
 .stButton > button:hover {{
-    transform: translateY(-1px) !important;
-    box-shadow: 0 6px 25px rgba(124,58,237,0.5) !important;
+    transform:translateY(-2px) !important;
+    box-shadow:0 7px 24px rgba(124,58,237,0.45) !important;
 }}
 
-/* Download button (special) */
+/* Settings icon button — small & outlined */
+div[data-testid="column"]:last-child .stButton > button {{
+    background:transparent !important;
+    border:1.5px solid rgba(167,139,250,0.45) !important;
+    color:#a78bfa !important;
+    font-size:1rem !important;
+    padding:0.3rem 0.7rem !important;
+    box-shadow:none !important;
+    width:auto !important;
+    min-width:unset !important;
+}}
+
+/* Download save button */
 .stDownloadButton > button {{
-    background: linear-gradient(135deg, #059669, #0891b2) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 14px !important;
-    font-family: 'Syne', sans-serif !important;
-    font-weight: 700 !important;
-    padding: 0.7rem 2rem !important;
-    width: 100% !important;
-    box-shadow: 0 4px 20px rgba(5,150,105,0.35) !important;
+    background:linear-gradient(135deg,#047857,#0e7490) !important;
+    color:white !important;
+    border:none !important;
+    border-radius:13px !important;
+    font-family:'Syne',sans-serif !important;
+    font-weight:700 !important;
+    padding:0.65rem 1.5rem !important;
+    width:100% !important;
+    box-shadow:0 4px 18px rgba(4,120,87,0.28) !important;
 }}
 
 /* Selectbox */
 .stSelectbox > div > div {{
-    background: {input_bg} !important;
-    border: 1.5px solid {input_border} !important;
-    border-radius: 14px !important;
-    color: {text_color} !important;
+    background:{inp_bg} !important;
+    border:1.5px solid {inp_bdr} !important;
+    border-radius:13px !important;
+    color:{fg} !important;
 }}
 
 /* Progress bar */
 .stProgress > div > div > div > div {{
-    background: linear-gradient(90deg, #7c3aed, #db2777) !important;
-    border-radius: 10px !important;
+    background:linear-gradient(90deg,#7c3aed,#db2777) !important;
+    border-radius:10px !important;
 }}
 
-/* Success/Error/Info */
-.stSuccess, .stError, .stInfo, .stWarning {{
-    border-radius: 14px !important;
-    font-family: 'DM Sans', sans-serif !important;
-}}
+.meta   {{ color:{sub}; font-size:0.81rem; margin:0.25rem 0 0.7rem; }}
+.vtitle {{ font-family:'Syne',sans-serif; font-weight:700; font-size:1.04rem; color:{fg}; margin:0.5rem 0 0.15rem; line-height:1.3; }}
+.stag   {{ font-size:0.77rem; color:{sub}; font-style:italic; margin-top:0.35rem; }}
 
-/* Video info */
-.video-title {{
-    font-family: 'Syne', sans-serif;
-    font-weight: 700;
-    font-size: 1.1rem;
-    color: {text_color};
-    margin: 0.8rem 0 0.4rem;
-    line-height: 1.3;
-}}
-.video-meta {{
-    color: {subtext_color};
-    font-size: 0.85rem;
-    margin-bottom: 1rem;
-}}
-.size-tag {{
-    font-size: 0.78rem;
-    color: {subtext_color};
-    font-style: italic;
-}}
-
-/* Sidebar */
-.css-1d391kg, [data-testid="stSidebar"] {{
-    background: {'rgba(10,5,25,0.95)' if is_dark else 'rgba(245,240,255,0.95)'} !important;
-}}
+[data-testid="stSidebar"] {{ background:{sb_bg} !important; }}
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================
-# HERO HEADER
+# HERO
 # ============================================================
 st.markdown("""
-<div class="aula-hero">
-    <h1 class="aula-title">AULA</h1>
-    <p class="aula-sub">Universal Media Downloader</p>
-    <div style="margin-top: 0.8rem;">
-        <span class="platform-badge yt-badge">▶ YouTube</span>
-        <span class="platform-badge ig-badge">◈ Instagram</span>
-        <span class="platform-badge tt-badge">♪ TikTok</span>
-    </div>
+<div class="aura-wrap">
+  <h1 class="aura-name">AURA</h1>
+  <p class="aura-sub">Universal Media Downloader</p>
+  <div>
+    <span class="badge yt">▶ YouTube</span>
+    <span class="badge ig">◈ Instagram</span>
+    <span class="badge tt">♪ TikTok</span>
+  </div>
 </div>
 """, unsafe_allow_html=True)
+
+# Settings gear button — top right
+_, col_gear = st.columns([6, 1])
+with col_gear:
+    if st.button("⚙️", key="gear_btn", help="Settings & About"):
+        st.session_state.settings_open = not st.session_state.settings_open
+        st.rerun()
 
 # ============================================================
 # STAGE: HOME
 # ============================================================
 if st.session_state.stage == 'home':
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.markdown("### 🔗 Paste Your Link")
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown(f"<p style='font-family:Syne,sans-serif;font-weight:700;font-size:1rem;color:{fg};margin:0 0 0.5rem;'>🔗 Paste Video Link</p>", unsafe_allow_html=True)
 
     url = st.text_input(
-        "Video URL",
-        placeholder="https://youtube.com/watch?v=... or instagram.com/reel/...",
-        label_visibility="collapsed"
+        "url",
+        placeholder="youtube.com/watch?v=...  •  instagram.com/reel/...  •  tiktok.com/...",
+        label_visibility="collapsed",
+        key="url_input"
     )
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        search_btn = st.button("🔍 FETCH VIDEO INFO", use_container_width=True)
-    with col2:
+    c1, c2 = st.columns([5, 1])
+    with c1:
+        fetch_btn = st.button("🔍  FETCH VIDEO INFO", use_container_width=True)
+    with c2:
         if url:
-            platform = detect_platform(url)
-            icons = {"youtube": "▶️ YT", "instagram": "📸 IG", "tiktok": "🎵 TT", "other": "🌐 Web"}
-            st.markdown(f"<div style='text-align:center;padding-top:0.6rem;font-size:0.85rem;color:{subtext_color};'>{icons.get(platform,'🌐')}</div>", unsafe_allow_html=True)
+            pf = detect_platform(url)
+            icons = {"youtube": "▶️", "instagram": "📸", "tiktok": "🎵", "other": "🌐"}
+            st.markdown(
+                f"<div style='text-align:center;padding-top:0.5rem;font-size:1.3rem'>{icons.get(pf,'🌐')}</div>",
+                unsafe_allow_html=True
+            )
 
-    if search_btn:
-        if not url or not url.strip():
-            st.error("⚠️ Please paste a valid URL first.")
+    if fetch_btn:
+        if not (url and url.strip()):
+            st.error("⚠️ Please paste a link first.")
         else:
             url = url.strip()
-            platform = detect_platform(url)
-            progress = st.progress(0, text="Connecting to platform...")
+            pf  = detect_platform(url)
+            bar = st.progress(0, text="Connecting…")
             try:
-                progress.progress(30, text="Fetching video metadata...")
+                bar.progress(25, text="Fetching video info…")
                 info = get_video_info(url)
-                progress.progress(70, text="Analyzing available formats...")
-                formats = get_format_sizes(info, platform)
-                progress.progress(100, text="Done!")
+                bar.progress(70, text="Reading formats…")
+                fmts = get_format_sizes(info, pf)
+                bar.progress(100, text="Done!")
                 st.session_state.video_info = info
-                st.session_state.url = url
-                st.session_state.formats = formats
-                st.session_state.platform = platform
-                st.session_state.stage = 'quality'
-                import time; time.sleep(0.3)
+                st.session_state.url        = url
+                st.session_state.formats    = fmts
+                st.session_state.platform   = pf
+                st.session_state.stage      = 'quality'
+                time.sleep(0.2)
                 st.rerun()
             except Exception as e:
-                progress.empty()
-                err_msg = str(e)
-                if "Private" in err_msg or "private" in err_msg:
-                    st.error("🔒 This video is private. Please use a public link.")
-                elif "Sign in" in err_msg or "login" in err_msg.lower():
-                    st.error("🔑 This content requires login. Only public content is supported.")
-                elif "not available" in err_msg.lower():
-                    st.error("❌ Video not available in your region or has been removed.")
+                bar.empty()
+                msg = str(e)
+                if "private" in msg.lower():
+                    st.error("🔒 Private video — please use a public link.")
+                elif "sign in" in msg.lower() or "login" in msg.lower():
+                    st.error("🔑 Login required — only public videos are supported.")
+                elif "not available" in msg.lower():
+                    st.error("❌ Video unavailable or removed.")
                 else:
-                    st.error(f"❌ Could not fetch video info. Please check the link and try again.\n\nHint: Make sure the video is public and the URL is complete.")
+                    st.error("❌ Could not fetch video. Please check the link and try again.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Tips card
-    st.markdown(f"""
-    <div class="glass-card" style="padding:1.2rem 2rem;">
-        <p style="color:{subtext_color};font-size:0.85rem;margin:0;line-height:1.8;">
-        💡 <strong>Tips:</strong><br>
-        • YouTube: Use full URLs (youtube.com/watch?v=...) or short links (youtu.be/...)<br>
-        • Instagram: Make sure the Reel/post is public<br>
-        • TikTok: Copy the share link from the app for best results
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="card" style="padding:0.9rem 1.5rem;">
+    <p style="color:{sub};font-size:0.8rem;margin:0;line-height:2;">
+    💡 <b>Tips</b><br>
+    • YouTube — full URL or short youtu.be link<br>
+    • Instagram — must be a public Reel or post<br>
+    • TikTok — use Share → Copy Link from the app
+    </p></div>""", unsafe_allow_html=True)
 
 # ============================================================
-# STAGE: QUALITY SELECTION
+# STAGE: QUALITY
 # ============================================================
 elif st.session_state.stage == 'quality':
-    info = st.session_state.video_info
-    formats = st.session_state.formats
-    platform = st.session_state.get('platform', 'other')
-    platform_labels = {"youtube": "▶ YouTube", "instagram": "◈ Instagram", "tiktok": "♪ TikTok", "other": "🌐 Web"}
+    info     = st.session_state.video_info
+    formats  = st.session_state.formats
+    platform = st.session_state.platform
+    url      = st.session_state.url
 
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-
-    # Thumbnail + info
-    thumb = info.get('thumbnail')
-    title = info.get('title', 'Video')
+    thumb    = info.get('thumbnail')
+    title    = info.get('title', 'Video')
     duration = info.get('duration')
     uploader = info.get('uploader') or info.get('channel') or ""
+
+    pf_icon  = {"youtube": "🔴", "instagram": "💜", "tiktok": "🖤", "other": "🌐"}
+    pf_label = {"youtube": "YouTube", "instagram": "Instagram", "tiktok": "TikTok", "other": "Web"}
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
 
     if thumb:
         st.image(thumb, use_container_width=True)
 
-    platform_icon = {"youtube": "🔴", "instagram": "💜", "tiktok": "🖤", "other": "🌐"}
+    dur_str = f"⏱ {int(duration//60)}m {int(duration%60)}s  •  " if duration else ""
     st.markdown(f"""
-    <div class="video-title">{title[:80]}{'...' if len(title)>80 else ''}</div>
-    <div class="video-meta">
-        {platform_icon.get(platform,'🌐')} {platform_labels.get(platform,'Web')}
-        {'&nbsp;&nbsp;•&nbsp;&nbsp;⏱ ' + str(int(duration//60)) + 'm ' + str(int(duration%60)) + 's' if duration else ''}
-        {'&nbsp;&nbsp;•&nbsp;&nbsp;' + uploader if uploader else ''}
-    </div>
+    <div class="vtitle">{title[:85]}{'…' if len(title) > 85 else ''}</div>
+    <div class="meta">{pf_icon.get(platform,'🌐')} {pf_label.get(platform,'Web')}
+     &nbsp;•&nbsp; {dur_str}{uploader}</div>
     """, unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("### 📥 Select Download Quality")
+    st.markdown(f"<p style='font-family:Syne,sans-serif;font-weight:700;color:{fg};margin:0 0 0.4rem;'>📥 Select Quality</p>", unsafe_allow_html=True)
 
-    # Build selectbox options with size info
-    format_labels = []
-    for label, fdata in formats.items():
-        size_str = format_size(fdata['size'])
-        format_labels.append(f"{label}  ({size_str})")
+    fmt_keys   = list(formats.keys())
+    fmt_labels = [f"{k}  ({fmt_size(formats[k]['size'])})" for k in fmt_keys]
 
-    selected_idx = st.selectbox(
-        "Quality",
-        range(len(format_labels)),
-        format_func=lambda i: format_labels[i],
+    sel_idx = st.selectbox(
+        "qual", range(len(fmt_labels)),
+        format_func=lambda i: fmt_labels[i],
         label_visibility="collapsed"
     )
 
-    selected_label = list(formats.keys())[selected_idx]
-    selected_format = formats[selected_label]
-
-    # Show format info
-    is_audio = selected_format.get('is_audio', False)
-    file_type = "MP3 Audio" if is_audio else "MP4 Video"
-    st.markdown(f"<div class='size-tag'>📦 Format: {file_type} &nbsp;|&nbsp; Estimated size: {format_size(selected_format['size'])}</div>", unsafe_allow_html=True)
-
+    sel_key  = fmt_keys[sel_idx]
+    sel_fmt  = formats[sel_key]
+    is_audio = sel_fmt.get('is_audio', False)
+    ftype    = "MP3 Audio" if is_audio else "MP4 Video"
+    st.markdown(f"<div class='stag'>📦 {ftype}  |  Est. size: {fmt_size(sel_fmt['size'])}</div>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Download button
-    dl_btn = st.button("⬇️ DOWNLOAD NOW", use_container_width=True)
+    dl_btn = st.button("⬇️  DOWNLOAD NOW", use_container_width=True)
 
     if dl_btn:
-        progress = st.progress(0, text="Starting download...")
+        bar = st.progress(0, text="Starting download…")
         try:
-            progress.progress(20, text="Connecting to server...")
-            import time
-            time.sleep(0.5)
-            progress.progress(50, text="Downloading... (this may take a moment)")
-
-            file_path = download_video(
-                st.session_state.url,
-                selected_format['format'],
-                is_audio,
-                output_name="aula_output"
-            )
-            progress.progress(90, text="Preparing file...")
+            bar.progress(15, text="Connecting to platform…")
             time.sleep(0.3)
+            bar.progress(45, text="Downloading… (may take a moment)")
 
-            if file_path and os.path.exists(file_path):
-                progress.progress(100, text="✅ Ready!")
-                ext = "mp3" if is_audio else "mp4"
-                safe_title = re.sub(r'[^\w\s-]', '', title[:40]).strip().replace(' ', '_')
-                download_name = f"Aula_{safe_title}_{selected_label.replace(' ','_')}.{ext}"
+            path = download_video(url, sel_fmt['format'], is_audio)
+            bar.progress(90, text="Preparing file…")
+            time.sleep(0.2)
 
-                with open(file_path, "rb") as f:
-                    file_bytes = f.read()
+            if path and os.path.exists(path):
+                bar.progress(100, text="✅ Ready!")
+                ext   = "mp3" if is_audio else "mp4"
+                safe  = re.sub(r'[^\w\s-]', '', title[:40]).strip().replace(' ', '_')
+                fname = f"AURA_{safe}.{ext}"
 
-                st.success("✅ Download ready! Click below to save to your device.")
+                with open(path, "rb") as f:
+                    data = f.read()
+
+                st.success("✅ Done! Tap the button below to save to your device.")
                 st.download_button(
-                    label=f"💾 SAVE TO DEVICE  ({format_size(len(file_bytes))})",
-                    data=file_bytes,
-                    file_name=download_name,
+                    label=f"💾  SAVE TO DEVICE  ({fmt_size(len(data))})",
+                    data=data,
+                    file_name=fname,
                     mime="audio/mpeg" if is_audio else "video/mp4",
                     use_container_width=True
                 )
-                # Cleanup temp file
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
+                try: os.remove(path)
+                except: pass
             else:
-                progress.empty()
-                st.error("❌ Download failed. The file could not be found after download.")
+                bar.empty()
+                st.error("❌ File not found after download. Please try again.")
 
         except Exception as e:
-            progress.empty()
+            bar.empty()
             err = str(e)
             if "ffmpeg" in err.lower():
-                st.error("⚠️ FFmpeg is required for this format. Please install ffmpeg on your server.")
+                st.error("⚠️ FFmpeg missing. Make sure 'ffmpeg' is in packages.txt.")
             elif "403" in err or "forbidden" in err.lower():
-                st.error("🔒 Access denied by platform. Try a different quality or check if the link is still valid.")
+                st.warning("⚠️ Platform blocked the request. Please try a different quality option.")
             elif "unavailable" in err.lower() or "removed" in err.lower():
-                st.error("❌ This video is no longer available.")
-            else:
-                st.warning(f"⚠️ Download encountered an error. Try a different quality option.\n\nDetails: {err[:200]}")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Back butto
+           
