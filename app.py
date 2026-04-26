@@ -127,44 +127,31 @@ def download_video(url, fmt, is_audio, output_name="aura_dl"):
             try: os.remove(f"/tmp/{f}")
             except: pass
 
-    is_yt = 'youtube.com' in url.lower() or 'youtu.be' in url.lower()
-    client_tries = [['ios'], ['android'], ['android_music'], ['web']] if is_yt else [None]
-    last_err = None
+    opts = get_ydl_base()
+    opts.update({
+        'format': fmt,
+        'outtmpl': f"/tmp/{output_name}.%(ext)s",
+        'merge_output_format': 'mp4' if not is_audio else None,
+        # Use android player client to bypass YouTube 403
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    })
 
-    for clients in client_tries:
-        try:
-            opts = get_ydl_base()
-            opts.update({
-                'format': fmt,
-                'outtmpl': f"/tmp/{output_name}.%(ext)s",
-                'merge_output_format': 'mp4' if not is_audio else None,
-            })
-            if is_yt and clients:
-                opts['extractor_args'] = {
-                    'youtube': {
-                        'player_client': clients,
-                        'skip': ['dash', 'hls'],
-                    }
-                }
-            if is_audio:
-                opts['postprocessors'] = [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }]
-            if 'tiktok' in url.lower():
-                opts['http_headers']['Referer'] = 'https://www.tiktok.com/'
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
-            for f in os.listdir('/tmp'):
-                if f.startswith(output_name):
-                    return f"/tmp/{f}"
-        except Exception as e:
-            last_err = e
-            continue
+    if is_audio:
+        opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
 
-    if last_err:
-        raise last_err
+    if 'tiktok' in url.lower():
+        opts['http_headers']['Referer'] = 'https://www.tiktok.com/'
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
+
+    for f in os.listdir('/tmp'):
+        if f.startswith(output_name):
+            return f"/tmp/{f}"
     return None
 
 # ============================================================
@@ -544,4 +531,17 @@ elif st.session_state.stage == 'quality':
                     use_container_width=True
                 )
                 try: os.remove(path)
-   
+                except: pass
+            else:
+                bar.empty()
+                st.error("❌ File not found after download. Please try again.")
+
+        except Exception as e:
+            bar.empty()
+            err = str(e)
+            if "ffmpeg" in err.lower():
+                st.error("⚠️ FFmpeg missing. Make sure 'ffmpeg' is in packages.txt.")
+            elif "403" in err or "forbidden" in err.lower():
+                st.warning("⚠️ Platform blocked the request. Please try a different quality option.")
+            elif "unavailable" in err.lower() or "removed" in err.lower():
+           
