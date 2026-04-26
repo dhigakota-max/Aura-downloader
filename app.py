@@ -113,6 +113,9 @@ def download_video(url, fmt, is_audio, output_name="aura_dl"):
                 "outtmpl": "/tmp/" + output_name + ".%(ext)s",
                 "merge_output_format": "mp4" if not is_audio else None,
             })
+            cookies_path = "/mount/src/aura-downloader/cookies.txt"
+            if os.path.exists(cookies_path):
+                opts["cookiefile"] = cookies_path
             if is_yt and clients:
                 opts["extractor_args"] = {"youtube": {"player_client": clients, "skip": ["dash", "hls"]}}
             if is_audio:
@@ -314,4 +317,4 @@ elif st.session_state.stage == "quality":
         st.session_state.formats = {}
         st.session_state.platform = "other"
         st.rerun()
-    
+            
