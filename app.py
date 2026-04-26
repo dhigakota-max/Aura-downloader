@@ -544,4 +544,17 @@ elif st.session_state.stage == 'quality':
             elif "403" in err or "forbidden" in err.lower():
                 st.warning("⚠️ Platform blocked the request. Please try a different quality option.")
             elif "unavailable" in err.lower() or "removed" in err.lower():
-           
+                st.error("❌ This video is no longer available.")
+            elif "nsig" in err.lower() or "cipher" in err.lower():
+                st.error("⚠️ yt-dlp is outdated. Update it: pip install -U yt-dlp")
+            else:
+                st.warning(f"⚠️ Error occurred: {err[:250]}")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if st.button("← Search New Link"):
+        st.session_state.stage      = 'home'
+        st.session_state.video_info = None
+        st.session_state.formats    = {}
+        st.session_state.platform   = 'other'
+        st.rerun()
