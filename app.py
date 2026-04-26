@@ -16,8 +16,6 @@ if 'stage' not in st.session_state:
 # --- Sidebar: Settings & About ---
 with st.sidebar:
     st.title("⚙️ Settings")
-    
-    # Theme Toggle
     st.session_state.theme = st.selectbox("Select Theme:", ["Dark", "Light"])
     
     st.markdown("---")
@@ -83,7 +81,7 @@ st.markdown(f"""
         -webkit-text-fill-color: transparent;
         text-shadow: 0 0 20px rgba(255, 0, 128, 0.5);
         letter-spacing: 6px;
-        margin-bottom: 0;
+        margin: 0;
     }}
 
     .subtitle {{
@@ -140,10 +138,25 @@ if st.session_state.stage == 'home':
 
 elif st.session_state.stage == 'quality':
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.markdown(f"<h3 style='color: {text_color};'>Select Quality</h3>", unsafe_allow_html=True)
-    option = st.selectbox("", ["High Quality Video", "Audio Only (MP3)"], label_visibility="collapsed")
+    st.markdown(f"<h3 style='color: {text_color}; margin-bottom: 15px;'>Select Quality</h3>", unsafe_allow_html=True)
+    
+    # Updated Quality Options as per your request
+    quality_options = [
+        "480p (File size)",
+        "720p (File size)",
+        "1080p (File size)",
+        "4K (File size)",
+        "MP3 (File size)"
+    ]
+    
+    option = st.selectbox("", quality_options, label_visibility="collapsed")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
     if st.button("START DOWNLOAD"):
-        st.success("Download started!")
+        with st.spinner("Processing..."):
+            time.sleep(2)
+            st.success(f"Downloading {option}...")
+        
     if st.button("← GO BACK"):
         st.session_state.stage = 'home'
         st.rerun()
